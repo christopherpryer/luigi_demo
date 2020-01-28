@@ -10,7 +10,14 @@ TODO: ...
 
 NOTE: this is not optimized. i.e. reading DfToLocal output for each process.
 """
-from . import utils as u
+is_main = False
+if __name__ == '__main__':
+    is_main = True
+
+    import utils as u
+
+else:
+    from . import utils as u
 
 import pandas as pd
 import os
@@ -33,20 +40,36 @@ class DfDbToLocal(luigi.Task):
         df = pd.read_sql(q, con=db)
         LOG.info('Shipments %s' % str(df.shape))
         df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), index=False)
+        df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data_norming.csv'), index=False)
 
     def output(self):
         return luigi.LocalTarget('tmp/tm_data.csv')
 
-class Windows(luigi.Task):
-    name = 'windows'
-    filename = '%s.csv' % name
+class EngBase(luigi.Task):
     database_name = luigi.Parameter()
 
-    def run(self):
-        df = pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), 
+    @staticmethod
+    def get_df():
+        return pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data_norming.csv'), 
             encoding='windows-1254')
+
+    def norm(self, cols, df):
+        tmp = df[cols].drop_duplicates()
+        tmp.reset_index(inplace=True, drop=True)
+        tmp['%s_id' % self.name] = tmp.index.tolist()
+        df = df.merge(tmp, on=cols)
+        df.drop(cols, axis=1, inplace=True)
+        tmp.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+        df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data_norming.csv'), index=False)
+
+class Windows(EngBase):
+    name = 'windows'
+    filename = '%s.csv' % name
+
+    def run(self):
+        df = self.get_df()
         cols = [col for col in df.columns if 'date' in col.lower()]
-        df[cols].to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+        self.norm(cols, df)
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -54,15 +77,13 @@ class Windows(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Products(luigi.Task):
+class Products(EngBase):
     name = 'products'
     filename = '%s.csv' % name
-    database_name = luigi.Parameter()
 
     def run(self):
-        df = pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), 
-            encoding='windows-1254')
-        df[['CustPO']].to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+        cols = ['CustPO']
+        self.norm(cols, self.get_df())        
 
     def requires(self): 
         return DfDbToLocal(self.database_name)
@@ -70,16 +91,13 @@ class Products(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Carriers(luigi.Task):
+class Carriers(EngBase):
     name = 'carriers'
     filename = '%s.csv' % name
-    database_name = luigi.Parameter()
 
     def run(self):
         cols = ['Mode', 'SCAC', 'CarrierName', 'EquipmentName']
-        df = pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), 
-            encoding='windows-1254')
-        df[cols].to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+        self.norm(cols, self.get_df())
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -87,16 +105,13 @@ class Carriers(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Origins(luigi.Task):
+class Origins(EngBase):
     name = 'origins'
     filename = '%s.csv' % name
-    database_name = luigi.Parameter()
 
     def run(self):
         cols = ['PULocId', 'PULocName', 'PUAddr', 'PUCity', 'PUState', 'PUZip']
-        df = pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), 
-            encoding='windows-1254')
-        df[cols].to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+        self.norm(cols, self.get_df())
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -104,16 +119,13 @@ class Origins(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Destinations(luigi.Task):
-    name = 'origins'
+class Destinations(EngBase):
+    name = 'destinations'
     filename = '%s.csv' % name
-    database_name = luigi.Parameter()
 
     def run(self):
         cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
-        df = pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), 
-            encoding='windows-1254')
-        df[cols].to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+        self.norm(cols, self.get_df())
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -131,6 +143,8 @@ class ProcessDbToDb(luigi.Task):
         yield Windows(self.database_name)
         yield Products(self.database_name)
         yield Carriers(self.database_name)
+        yield Origins(self.database_name)
+        yield Destinations(self.database_name)
 
-if __name__ == '__main__':
+if is_main:
     luigi.run()
