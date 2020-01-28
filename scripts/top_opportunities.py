@@ -36,9 +36,14 @@ def get_db_connection(server, database):
 SERVER = os.environ['SERVER']
 CURRDIR = os.path.dirname(os.path.abspath(__name__))
 
-class Shipments(luigi.Task):
+class ShipmentsLocal(luigi.Task):
     file_name = 'shipments.csv'
     table_name = 'shipments'
+            
+    def output(self):
+        return luigi.LocalTarget('tmp/%s' % self.file_name)
+
+class ShipmentsDbToLocalExample(ShipmentsLocal):
     database_name = luigi.Parameter()
 
     def run(self):
@@ -47,15 +52,17 @@ class Shipments(luigi.Task):
         logger.info('Shipments %s' % str(df.shape))
         df.to_csv(os.path.join(CURRDIR, 'tmp', self.file_name),
             index=False)
-            
-    def output(self):
-        return luigi.LocalTarget('tmp/shipments.csv')
+
+class HainShipments(ShipmentsDbToLocalExample):
+    # TODO: Task to pull new hain data for processing.
+    file_name = 'hain_tm.csv'
+    table_name = ''
 
 class AggregateLTL(luigi.Task):
     database_name = luigi.Parameter() # TODO: look into luigi abstraction of db connection.
     
     def requires(self):
-        return Shipments(self.database_name)
+        return ShipmentsDbToLocalExample(self.database_name)
 
 
 if __name__ == "__main__":
