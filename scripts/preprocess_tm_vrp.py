@@ -19,8 +19,10 @@ if __name__ == '__main__':
 else:
     from . import utils as u
 
+from haversine import haversine, Unit
 import pgeocode as pg
 import pandas as pd
+import pickle
 import os
 
 import luigi
@@ -45,7 +47,7 @@ class DfDbToLocal(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/tm_data.csv')
 
-class EngBase(luigi.Task):
+class Base(luigi.Task):
     database_name = luigi.Parameter()
 
     @staticmethod
@@ -70,7 +72,7 @@ class LocationBase(luigi.Task):
         df['longitude'] = results.longitude
         return df
 
-class Windows(EngBase):
+class Windows(Base):
     name = 'windows'
     filename = '%s.csv' % name
 
@@ -85,7 +87,7 @@ class Windows(EngBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Products(EngBase):
+class Products(Base):
     name = 'products'
     filename = '%s.csv' % name
 
@@ -99,7 +101,7 @@ class Products(EngBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Carriers(EngBase):
+class Carriers(Base):
     name = 'carriers'
     filename = '%s.csv' % name
 
@@ -113,7 +115,7 @@ class Carriers(EngBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Origins(EngBase, LocationBase):
+class Origins(Base, LocationBase):
     name = 'origins'
     filename = '%s.csv' % name
 
@@ -129,7 +131,7 @@ class Origins(EngBase, LocationBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Destinations(EngBase, LocationBase):
+class Destinations(Base, LocationBase):
     name = 'destinations'
     filename = '%s.csv' % name
 
@@ -141,6 +143,36 @@ class Destinations(EngBase, LocationBase):
 
     def requires(self):
         return DfDbToLocal(self.database_name)
+    
+    def output(self):
+        return luigi.LocalTarget('tmp/%s' % self.filename)
+
+
+class LocationMatrix(luigi.Task):
+    name = 'location_matrix'
+    filename = '%s.pkl' % name
+
+    def run(self):
+        origins = pd.read_csv(os.path.join(ROOT, 'tmp', Origins.filename))
+        destinations = pd.read_csv(os.path.join(ROOT, 'tmp', Destinations.filename))
+
+        for col in ['latitude', 'longitude']: 
+            origins[col] = origins[col].round(2)
+            destinations[col] = destinations[col].round(2)
+
+        origins.drop_duplicates(subset=['latitude', 'longitude'], inplace=True)
+        destinations.drop_duplicates(subset=['latitude', 'longitude'], inplace=True)
+
+        locations = list(zip(origins.latitude, origins.longitude)) \
+            + list(zip(destinations.latitude, destinations.longitude))
+        matrix = [[(l2, haversine(l1, l2, unit=Unit.MILES)) for l2 in locations] for l1 in locations]
+        with open(os.path.join(ROOT, 'tmp', self.filename), 'wb') as f:
+            pickle.dump(matrix, f)
+
+    def requires(self):
+        # TODO: use account as pipeline id instead of None.
+        yield Destinations(None)
+        yield Origins(None)
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)

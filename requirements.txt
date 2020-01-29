@@ -2,6 +2,7 @@ APScheduler==3.6.3
 certifi==2019.11.28
 chardet==3.0.4
 docutils==0.16
+haversine==2.2.0
 idna==2.8
 lockfile==0.12.2
 luigi==2.8.11
