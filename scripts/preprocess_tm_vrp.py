@@ -195,6 +195,40 @@ class LocationMatrix(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
+class SCGCustomers(LocationBase):
+    name = 'scg_customers'
+    filename = '%s.csv' % name # TODO: align this with SCG local formatting.
+    sql_mapping = {
+        'DLCity': ('CustomerName', str),
+        'DLState': ('CustomerState', str),
+        'DLZip': ('CustomerZipCode', str),
+        'latitude': ('CustomerLatitude', float),
+        'longitude': ('CustomerLongitude', float)
+        }
+    
+    def run(self):
+        retyper = {key: self.sql_mapping[key][1] for key in self.sql_mapping}
+        customers = pd.read_csv(os.path.join(ROOT, 'tmp', Destinations.filename), dtype=retyper)
+        LOG.info('SCGCustomers->customers.shape: %s' % str(customers.shape))
+        # NOTE: assuming we can build models at various levels, this implementation
+        # will assume the model is built at the level of a 5-digit zipcode.
+        # cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
+        # below is a SCG backend-direct SQL integration.
+        dropper = [col for col in customers.columns if col not in self.sql_mapping]
+        customers.drop(dropper, axis=1, inplace=True)
+        customers.drop_duplicates(inplace=True)
+        LOG.info('SCGCustomers->drop(%s) shape(%s)' % (str(dropper), str(customers.shape)))
+        renamer = {key: self.sql_mapping[key][0] for key in self.sql_mapping}
+        customers.rename(columns=renamer, inplace=True)
+        LOG.info('SCGCustomers->retyper(%s) renamer(%s)' % (str(retyper), str(renamer)))
+        customers.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+
+    def requires(self): 
+        return Destinations()
+
+    def output(self):
+        return luigi.LocalTarget('tmp/%s' % self.filename)
+
 class ProcessDbToDb(luigi.Task):
     
     def run(self):
@@ -207,6 +241,7 @@ class ProcessDbToDb(luigi.Task):
         yield Origins()
         yield Destinations()
         yield LocationMatrix()
+        yield SCGCustomers()
 
 if is_main:
     luigi.run()
