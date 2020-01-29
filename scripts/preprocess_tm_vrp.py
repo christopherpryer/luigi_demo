@@ -19,6 +19,7 @@ if __name__ == '__main__':
 else:
     from . import utils as u
 
+import pgeocode as pg
 import pandas as pd
 import os
 
@@ -40,7 +41,6 @@ class DfDbToLocal(luigi.Task):
         df = pd.read_sql(q, con=db)
         LOG.info('Shipments %s' % str(df.shape))
         df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), index=False)
-        df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data_norming.csv'), index=False)
 
     def output(self):
         return luigi.LocalTarget('tmp/tm_data.csv')
@@ -50,17 +50,25 @@ class EngBase(luigi.Task):
 
     @staticmethod
     def get_df():
-        return pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data_norming.csv'), 
+        return pd.read_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), 
             encoding='windows-1254')
 
     def norm(self, cols, df):
         tmp = df[cols].drop_duplicates()
         tmp.reset_index(inplace=True, drop=True)
         tmp['%s_id' % self.name] = tmp.index.tolist()
-        df = df.merge(tmp, on=cols)
-        df.drop(cols, axis=1, inplace=True)
-        tmp.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
-        df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data_norming.csv'), index=False)
+        return tmp
+
+class LocationBase(luigi.Task):
+
+    @staticmethod
+    def geocode(df:pd.DataFrame, zip_col:str, country:str='US'):
+        """returns (lats:li, lons:li)"""
+        nomi = pg.Nominatim(country)
+        results = nomi.query_postal_code(df[zip_col].astype(str).tolist())
+        df['latitude'] = results.latitude
+        df['longitude'] = results.longitude
+        return df
 
 class Windows(EngBase):
     name = 'windows'
@@ -69,7 +77,7 @@ class Windows(EngBase):
     def run(self):
         df = self.get_df()
         cols = [col for col in df.columns if 'date' in col.lower()]
-        self.norm(cols, df)
+        self.norm(cols, df).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -83,7 +91,7 @@ class Products(EngBase):
 
     def run(self):
         cols = ['CustPO']
-        self.norm(cols, self.get_df())        
+        self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)  
 
     def requires(self): 
         return DfDbToLocal(self.database_name)
@@ -97,7 +105,7 @@ class Carriers(EngBase):
 
     def run(self):
         cols = ['Mode', 'SCAC', 'CarrierName', 'EquipmentName']
-        self.norm(cols, self.get_df())
+        self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -105,13 +113,15 @@ class Carriers(EngBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Origins(EngBase):
+class Origins(EngBase, LocationBase):
     name = 'origins'
     filename = '%s.csv' % name
 
     def run(self):
+        df = self.get_df()
         cols = ['PULocId', 'PULocName', 'PUAddr', 'PUCity', 'PUState', 'PUZip']
-        self.norm(cols, self.get_df())
+        tmp = self.norm(cols, df)
+        self.geocode(tmp, 'PUZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
         return DfDbToLocal(self.database_name)
@@ -119,13 +129,15 @@ class Origins(EngBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class Destinations(EngBase):
+class Destinations(EngBase, LocationBase):
     name = 'destinations'
     filename = '%s.csv' % name
 
     def run(self):
+        df = self.get_df()
         cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
-        self.norm(cols, self.get_df())
+        tmp = self.norm(cols, df)
+        self.geocode(tmp, 'DLZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
         return DfDbToLocal(self.database_name)
