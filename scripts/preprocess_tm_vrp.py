@@ -39,9 +39,11 @@ class DfDbToLocal(luigi.Task):
 
     def run(self):
         db = u.get_db_connection(SERVER, self.database_name)
+        LOG.info('DfDbToLocal->db: %s' % db)
         q = 'select top 10 * from vw3G_SSP_OrderMaster where BillTo like \'%hc%\''
+        LOG.info('DfDbToLocal->query: %s' % db)
         df = pd.read_sql(q, con=db)
-        LOG.info('Shipments %s' % str(df.shape))
+        LOG.info('DfDbToLocal->Shipments %s' % str(df.shape))
         df.to_csv(os.path.join(ROOT, 'tmp', 'tm_data.csv'), index=False)
 
     def output(self):
@@ -56,18 +58,25 @@ class Base(luigi.Task):
             encoding='windows-1254')
 
     def norm(self, cols, df):
-        tmp = df[cols].drop_duplicates()
-        tmp.reset_index(inplace=True, drop=True)
-        tmp['%s_id' % self.name] = tmp.index.tolist()
-        return tmp
+        LOG.info('Base->shape (pre-drop): %s' % str(df.shape))
+        df.drop_duplicates(subset=cols, inplace=True)
+        df.drop([col for col in df.columns if col not in cols], axis=1, inplace=True)
+        LOG.info('Base->shape (post-drop): %s' % str(df.shape))
+        df.reset_index(inplace=True, drop=True)
+        df['%s_id' % self.name] = df.index.tolist()
+        LOG.info('%s(Base)->nunique: %s' % (self.name.capitalize(), str(len(df))))
+        return df
 
 class LocationBase(luigi.Task):
 
-    @staticmethod
-    def geocode(df:pd.DataFrame, zip_col:str, country:str='US'):
+    def geocode(self, df:pd.DataFrame, zip_col:str, country:str='US'):
         """returns (lats:li, lons:li)"""
+        # TODO: optimize for unique zips.
+        LOG.info('LocationBase->geocode->zips(%s) country(%s)' % (str(len(df)), country))
         nomi = pg.Nominatim(country)
         results = nomi.query_postal_code(df[zip_col].astype(str).tolist())
+        LOG.info('%s(LocationBase)->geocode->results.lat.null(%s) results.lon.null(%s)' % \
+             (self.name.capitalize(), str(results.latitude.isna().sum()), str(results.longitude.isna().sum())))
         df['latitude'] = results.latitude
         df['longitude'] = results.longitude
         return df
@@ -79,6 +88,7 @@ class Windows(Base):
     def run(self):
         df = self.get_df()
         cols = [col for col in df.columns if 'date' in col.lower()]
+        LOG.info('Windows->cols: %s' % str(cols))
         self.norm(cols, df).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
@@ -93,6 +103,7 @@ class Products(Base):
 
     def run(self):
         cols = ['CustPO']
+        LOG.info('Products->cols: %s' % str(cols))
         self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)  
 
     def requires(self): 
@@ -107,6 +118,7 @@ class Carriers(Base):
 
     def run(self):
         cols = ['Mode', 'SCAC', 'CarrierName', 'EquipmentName']
+        LOG.info('Carriers->cols: %s' % str(cols))
         self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
@@ -122,6 +134,7 @@ class Origins(Base, LocationBase):
     def run(self):
         df = self.get_df()
         cols = ['PULocId', 'PULocName', 'PUAddr', 'PUCity', 'PUState', 'PUZip']
+        LOG.info('Origins->cols: %s' % str(cols))
         tmp = self.norm(cols, df)
         self.geocode(tmp, 'PUZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
@@ -138,6 +151,7 @@ class Destinations(Base, LocationBase):
     def run(self):
         df = self.get_df()
         cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
+        LOG.info('Destinations->cols: %s' % str(cols))
         tmp = self.norm(cols, df)
         self.geocode(tmp, 'DLZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
@@ -147,7 +161,6 @@ class Destinations(Base, LocationBase):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-
 class LocationMatrix(luigi.Task):
     name = 'location_matrix'
     filename = '%s.pkl' % name
@@ -155,6 +168,8 @@ class LocationMatrix(luigi.Task):
     def run(self):
         origins = pd.read_csv(os.path.join(ROOT, 'tmp', Origins.filename))
         destinations = pd.read_csv(os.path.join(ROOT, 'tmp', Destinations.filename))
+        LOG.info('LocationMatrix->norigins (pre-round): %s' % str(len(origins)))
+        LOG.info('LocationMatrix->ndestinations (pre-round): %s' % str(len(destinations)))
 
         for col in ['latitude', 'longitude']: 
             origins[col] = origins[col].round(2)
@@ -163,9 +178,13 @@ class LocationMatrix(luigi.Task):
         origins.drop_duplicates(subset=['latitude', 'longitude'], inplace=True)
         destinations.drop_duplicates(subset=['latitude', 'longitude'], inplace=True)
 
+        LOG.info('LocationMatrix->norigins (post-round): %s' % str(len(origins)))
+        LOG.info('LocationMatrix->ndestinations (post-round): %s' % str(len(destinations)))
+
         locations = list(zip(origins.latitude, origins.longitude)) \
             + list(zip(destinations.latitude, destinations.longitude))
         matrix = [[(l2, haversine(l1, l2, unit=Unit.MILES)) for l2 in locations] for l1 in locations]
+        LOG.info('LocationMatrix->nmatrix: %s' % str(len(matrix)))
         with open(os.path.join(ROOT, 'tmp', self.filename), 'wb') as f:
             pickle.dump(matrix, f)
 
@@ -189,6 +208,7 @@ class ProcessDbToDb(luigi.Task):
         yield Carriers(self.database_name)
         yield Origins(self.database_name)
         yield Destinations(self.database_name)
+        yield LocationMatrix()
 
 if is_main:
     luigi.run()
