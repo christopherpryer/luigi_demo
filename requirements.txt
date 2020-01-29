@@ -10,9 +10,11 @@ numpy==1.18.1
 pandas==0.25.3
 pgeocode==0.2.0
 psycopg2==2.8.4
+pymssql==2.1.4
 pyodbc==4.0.24
 python-daemon==2.2.4
 python-dateutil==2.8.1
+python-dotenv==0.10.5
 pytz==2019.3
 requests==2.22.0
 six==1.14.0

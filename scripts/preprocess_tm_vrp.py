@@ -10,12 +10,8 @@ TODO: ...
 
 NOTE: this is not optimized. i.e. reading DfToLocal output for each process.
 """
-is_main = False
 if __name__ == '__main__':
-    is_main = True
-
     import utils as u
-
 else:
     from . import utils as u
 
@@ -29,16 +25,23 @@ import luigi
 
 import logging
 
+from dotenv import load_dotenv
+
+ROOT = os.path.dirname(os.path.abspath(__name__))
+load_dotenv(os.path.join(ROOT, '.env'))
 
 LOG = logging.getLogger('luigi-interface')
-SERVER = os.environ['SERVER'] # TODO: server-a server-b
-DATABASE = os.environ['DATABASE'] # TODO: db-a db-b
-ROOT = os.path.dirname(os.path.abspath(__name__))
+SERVER_A = os.environ['SERVER_A']
+SERVER_B = os.environ['SERVER_B']
+DATABASE_A = os.environ['DB_A']
+DATABASE_B = os.environ['DB_B']
+SERVER_B_USR = os.environ['SERVER_B_USR']
+SERVER_B_PWD = os.environ['SERVER_B_PWD']
 
 class DfDbToLocal(luigi.Task):
 
     def run(self):
-        db = u.get_db_connection(SERVER, DATABASE)
+        db = u.get_db_connection(SERVER_A, DATABASE_A)
         LOG.info('DfDbToLocal->db: %s' % db)
         q = 'select top 10 * from vw3G_SSP_OrderMaster where BillTo like \'%hc%\''
         LOG.info('DfDbToLocal->query: %s' % db)
@@ -223,11 +226,21 @@ class SCGCustomers(LocationBase):
         LOG.info('SCGCustomers->retyper(%s) renamer(%s)' % (str(retyper), str(renamer)))
         customers.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
+        # insert to live scg table TODO: point this at a staging database.
+        # plus, to_sql is not efficient for large data sets (should work for weekly runs though.)
+        db = u.get_db_connection(SERVER_B, DATABASE_B)
+        scg_target = pd.read_sql('select * from Customers', con=db)
+        LOG.info('SCGCustomers->db(%s) scg_target.shape(%s)' % (str(db), str(scg_target.shape)))
+        scg_target.truncate(after=0).append(customers, sort=False) \
+                .to_sql('Customers', con=db, if_exists=False, index=False)
+
     def requires(self): 
         return Destinations()
 
     def output(self):
-        return luigi.LocalTarget('tmp/%s' % self.filename)
+        yield luigi.LocalTarget('tmp/%s' % self.filename)
+        yield luigi.contrib.mssqldb.MSSqlTarget(host=SERVER_B, database=DATABASE_B,
+            user=SERVER_B_USR, password=SERVER_B_PWD, table='Customers')
 
 class ProcessDbToDb(luigi.Task):
     
@@ -243,5 +256,5 @@ class ProcessDbToDb(luigi.Task):
         yield LocationMatrix()
         yield SCGCustomers()
 
-if is_main:
+if __name__ == '__main__':
     luigi.run()
