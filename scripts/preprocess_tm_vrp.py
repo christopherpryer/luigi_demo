@@ -22,6 +22,7 @@ import pickle
 import os
 
 import luigi
+from luigi.contrib.mssqldb import MSSqlTarget
 
 import logging
 
@@ -202,7 +203,8 @@ class SCGCustomers(LocationBase):
     name = 'scg_customers'
     filename = '%s.csv' % name # TODO: align this with SCG local formatting.
     sql_mapping = {
-        'DLCity': ('CustomerName', str),
+        'DLLocId': ('CustomerName', str),
+        'DLCity': ('CustomerCity', str),
         'DLState': ('CustomerState', str),
         'DLZip': ('CustomerZipCode', str),
         'latitude': ('CustomerLatitude', float),
@@ -231,16 +233,17 @@ class SCGCustomers(LocationBase):
         db = u.get_db_connection(SERVER_B, DATABASE_B)
         scg_target = pd.read_sql('select * from Customers', con=db)
         LOG.info('SCGCustomers->db(%s) scg_target.shape(%s)' % (str(db), str(scg_target.shape)))
-        scg_target.truncate(after=0).append(customers, sort=False) \
-                .to_sql('Customers', con=db, if_exists=False, index=False)
+        scg_target.drop(scg_target.index, inplace=True)
+        scg_target.append(customers, sort=False).to_sql('Customers', con=db, if_exists='replace', index=False)
 
     def requires(self): 
         return Destinations()
 
     def output(self):
         yield luigi.LocalTarget('tmp/%s' % self.filename)
-        yield luigi.contrib.mssqldb.MSSqlTarget(host=SERVER_B, database=DATABASE_B,
-            user=SERVER_B_USR, password=SERVER_B_PWD, table='Customers')
+        # TODO: ...
+        #yield MSSqlTarget(host=SERVER_B, database=DATABASE_B, user=SERVER_B_USR, 
+        #    password=SERVER_B_PWD, table='Customers', update_id=None)
 
 class ProcessDbToDb(luigi.Task):
     
