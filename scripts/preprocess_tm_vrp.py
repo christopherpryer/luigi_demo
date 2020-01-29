@@ -31,14 +31,14 @@ import logging
 
 
 LOG = logging.getLogger('luigi-interface')
-SERVER = os.environ['SERVER']
+SERVER = os.environ['SERVER'] # TODO: server-a server-b
+DATABASE = os.environ['DATABASE'] # TODO: db-a db-b
 ROOT = os.path.dirname(os.path.abspath(__name__))
 
 class DfDbToLocal(luigi.Task):
-    database_name = luigi.Parameter()
 
     def run(self):
-        db = u.get_db_connection(SERVER, self.database_name)
+        db = u.get_db_connection(SERVER, DATABASE)
         LOG.info('DfDbToLocal->db: %s' % db)
         q = 'select top 10 * from vw3G_SSP_OrderMaster where BillTo like \'%hc%\''
         LOG.info('DfDbToLocal->query: %s' % db)
@@ -50,7 +50,6 @@ class DfDbToLocal(luigi.Task):
         return luigi.LocalTarget('tmp/tm_data.csv')
 
 class Base(luigi.Task):
-    database_name = luigi.Parameter()
 
     @staticmethod
     def get_df():
@@ -92,7 +91,7 @@ class Windows(Base):
         self.norm(cols, df).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
 
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -107,7 +106,7 @@ class Products(Base):
         self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)  
 
     def requires(self): 
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
 
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -122,7 +121,7 @@ class Carriers(Base):
         self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -139,7 +138,7 @@ class Origins(Base, LocationBase):
         self.geocode(tmp, 'PUZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -156,7 +155,7 @@ class Destinations(Base, LocationBase):
         self.geocode(tmp, 'DLZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -190,24 +189,23 @@ class LocationMatrix(luigi.Task):
 
     def requires(self):
         # TODO: use account as pipeline id instead of None.
-        yield Destinations(None)
-        yield Origins(None)
+        yield Destinations()
+        yield Origins()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
 class ProcessDbToDb(luigi.Task):
-    database_name = luigi.Parameter()
-
+    
     def run(self):
         pass
 
     def requires(self):
-        yield Windows(self.database_name)
-        yield Products(self.database_name)
-        yield Carriers(self.database_name)
-        yield Origins(self.database_name)
-        yield Destinations(self.database_name)
+        yield Windows()
+        yield Products()
+        yield Carriers()
+        yield Origins()
+        yield Destinations()
         yield LocationMatrix()
 
 if is_main:
