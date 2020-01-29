@@ -31,14 +31,14 @@ import logging
 
 
 LOG = logging.getLogger('luigi-interface')
-SERVER = os.environ['SERVER']
+SERVER = os.environ['SERVER'] # TODO: server-a server-b
+DATABASE = os.environ['DATABASE'] # TODO: db-a db-b
 ROOT = os.path.dirname(os.path.abspath(__name__))
 
 class DfDbToLocal(luigi.Task):
-    database_name = luigi.Parameter()
 
     def run(self):
-        db = u.get_db_connection(SERVER, self.database_name)
+        db = u.get_db_connection(SERVER, DATABASE)
         LOG.info('DfDbToLocal->db: %s' % db)
         q = 'select top 10 * from vw3G_SSP_OrderMaster where BillTo like \'%hc%\''
         LOG.info('DfDbToLocal->query: %s' % db)
@@ -50,7 +50,6 @@ class DfDbToLocal(luigi.Task):
         return luigi.LocalTarget('tmp/tm_data.csv')
 
 class Base(luigi.Task):
-    database_name = luigi.Parameter()
 
     @staticmethod
     def get_df():
@@ -92,7 +91,7 @@ class Windows(Base):
         self.norm(cols, df).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
 
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -107,7 +106,7 @@ class Products(Base):
         self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)  
 
     def requires(self): 
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
 
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -122,7 +121,7 @@ class Carriers(Base):
         self.norm(cols, self.get_df()).to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -139,7 +138,7 @@ class Origins(Base, LocationBase):
         self.geocode(tmp, 'PUZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -156,7 +155,7 @@ class Destinations(Base, LocationBase):
         self.geocode(tmp, 'DLZip', 'US').to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
     def requires(self):
-        return DfDbToLocal(self.database_name)
+        return DfDbToLocal()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
@@ -190,25 +189,59 @@ class LocationMatrix(luigi.Task):
 
     def requires(self):
         # TODO: use account as pipeline id instead of None.
-        yield Destinations(None)
-        yield Origins(None)
+        yield Destinations()
+        yield Origins()
     
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class ProcessDbToDb(luigi.Task):
-    database_name = luigi.Parameter()
+class SCGCustomers(LocationBase):
+    name = 'scg_customers'
+    filename = '%s.csv' % name # TODO: align this with SCG local formatting.
+    sql_mapping = {
+        'DLCity': ('CustomerName', str),
+        'DLState': ('CustomerState', str),
+        'DLZip': ('CustomerZipCode', str),
+        'latitude': ('CustomerLatitude', float),
+        'longitude': ('CustomerLongitude', float)
+        }
+    
+    def run(self):
+        retyper = {key: self.sql_mapping[key][1] for key in self.sql_mapping}
+        customers = pd.read_csv(os.path.join(ROOT, 'tmp', Destinations.filename), dtype=retyper)
+        LOG.info('SCGCustomers->customers.shape: %s' % str(customers.shape))
+        # NOTE: assuming we can build models at various levels, this implementation
+        # will assume the model is built at the level of a 5-digit zipcode.
+        # cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
+        # below is a SCG backend-direct SQL integration.
+        dropper = [col for col in customers.columns if col not in self.sql_mapping]
+        customers.drop(dropper, axis=1, inplace=True)
+        customers.drop_duplicates(inplace=True)
+        LOG.info('SCGCustomers->drop(%s) shape(%s)' % (str(dropper), str(customers.shape)))
+        renamer = {key: self.sql_mapping[key][0] for key in self.sql_mapping}
+        customers.rename(columns=renamer, inplace=True)
+        LOG.info('SCGCustomers->retyper(%s) renamer(%s)' % (str(retyper), str(renamer)))
+        customers.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
+    def requires(self): 
+        return Destinations()
+
+    def output(self):
+        return luigi.LocalTarget('tmp/%s' % self.filename)
+
+class ProcessDbToDb(luigi.Task):
+    
     def run(self):
         pass
 
     def requires(self):
-        yield Windows(self.database_name)
-        yield Products(self.database_name)
-        yield Carriers(self.database_name)
-        yield Origins(self.database_name)
-        yield Destinations(self.database_name)
+        yield Windows()
+        yield Products()
+        yield Carriers()
+        yield Origins()
+        yield Destinations()
         yield LocationMatrix()
+        yield SCGCustomers()
 
 if is_main:
     luigi.run()
