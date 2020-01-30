@@ -1,5 +1,4 @@
-# luigi_demo
-Trying out luigi for ETL.
+# luigi_poc
 
 # Simple How-To (cygwin/bash) 
 *note* you'll need [.env](https://pypi.org/project/python-dotenv/) configured.
