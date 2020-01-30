@@ -180,7 +180,6 @@ class LocationMatrix(luigi.Task):
 
         origins.drop_duplicates(subset=['latitude', 'longitude'], inplace=True)
         destinations.drop_duplicates(subset=['latitude', 'longitude'], inplace=True)
-
         LOG.info('LocationMatrix->norigins (post-round): %s' % str(len(origins)))
         LOG.info('LocationMatrix->ndestinations (post-round): %s' % str(len(destinations)))
 
@@ -199,7 +198,38 @@ class LocationMatrix(luigi.Task):
     def output(self):
         return luigi.LocalTarget('tmp/%s' % self.filename)
 
-class SCGCustomers(LocationBase):
+
+class SCGLocationBase(LocationBase):
+    
+    def run(self, obj):
+        # NOTE: assuming we can build models at various levels, this implementation
+        # will assume the model is built at the level of a 5-digit zipcode.
+        # cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
+        # below is a SCG backend-direct SQL integration.
+        prfx = self.name.split('_')[-1].capitalize()
+        retyper = {key: self.sql_mapping[key][1] for key in self.sql_mapping}
+        df = pd.read_csv(os.path.join(ROOT, 'tmp', obj.filename), dtype=retyper)
+        LOG.info('%s(SCGLocationBase)->%s.shape: %s' % (self.name, self.name, str(df.shape)))
+        dropper = [col for col in df.columns if col not in self.sql_mapping]
+        df.drop(dropper, axis=1, inplace=True)
+        df.drop_duplicates(inplace=True)
+        LOG.info('%s(SCGLocationBase)->drop(%s) shape(%s)' % (self.name, str(dropper), str(df.shape)))
+        renamer = {key: self.sql_mapping[key][0] for key in self.sql_mapping}
+        df.rename(columns=renamer, inplace=True)
+        LOG.info('%s(SCGLocationBase)->retyper(%s) renamer(%s)' % (self.name, str(retyper), str(renamer)))
+        df.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
+
+        # insert to live scg table TODO: point this at a staging database.
+        # plus, to_sql is not efficient for large data sets (should work for weekly runs though.)
+        db = u.get_db_connection(SERVER_B, DATABASE_B)
+        scg_target = pd.read_sql('select * from %s' % prfx, con=db)
+        LOG.info('%s(SCGLocationBase)->db(%s) scg_target.shape(%s)' % \
+            (self.name, str(db), str(scg_target.shape)))
+        scg_target.drop(scg_target.index, inplace=True)
+        scg_target.append(df, sort=False).to_sql(prfx, con=db, if_exists='replace', index=False)
+
+
+class SCGCustomers(SCGLocationBase):
     name = 'scg_customers'
     filename = '%s.csv' % name # TODO: align this with SCG local formatting.
     sql_mapping = {
@@ -210,31 +240,6 @@ class SCGCustomers(LocationBase):
         'latitude': ('CustomerLatitude', float),
         'longitude': ('CustomerLongitude', float)
         }
-    
-    def run(self):
-        retyper = {key: self.sql_mapping[key][1] for key in self.sql_mapping}
-        customers = pd.read_csv(os.path.join(ROOT, 'tmp', Destinations.filename), dtype=retyper)
-        LOG.info('SCGCustomers->customers.shape: %s' % str(customers.shape))
-        # NOTE: assuming we can build models at various levels, this implementation
-        # will assume the model is built at the level of a 5-digit zipcode.
-        # cols = ['DLLocId', 'DLLocName', 'DLAddr', 'DLCity', 'DLState', 'DLZip']
-        # below is a SCG backend-direct SQL integration.
-        dropper = [col for col in customers.columns if col not in self.sql_mapping]
-        customers.drop(dropper, axis=1, inplace=True)
-        customers.drop_duplicates(inplace=True)
-        LOG.info('SCGCustomers->drop(%s) shape(%s)' % (str(dropper), str(customers.shape)))
-        renamer = {key: self.sql_mapping[key][0] for key in self.sql_mapping}
-        customers.rename(columns=renamer, inplace=True)
-        LOG.info('SCGCustomers->retyper(%s) renamer(%s)' % (str(retyper), str(renamer)))
-        customers.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
-
-        # insert to live scg table TODO: point this at a staging database.
-        # plus, to_sql is not efficient for large data sets (should work for weekly runs though.)
-        db = u.get_db_connection(SERVER_B, DATABASE_B)
-        scg_target = pd.read_sql('select * from Customers', con=db)
-        LOG.info('SCGCustomers->db(%s) scg_target.shape(%s)' % (str(db), str(scg_target.shape)))
-        scg_target.drop(scg_target.index, inplace=True)
-        scg_target.append(customers, sort=False).to_sql('Customers', con=db, if_exists='replace', index=False)
 
     def requires(self): 
         return Destinations()
