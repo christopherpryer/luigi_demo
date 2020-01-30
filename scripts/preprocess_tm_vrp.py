@@ -209,21 +209,22 @@ class SCGLocationBase(LocationBase):
         prfx = self.name.split('_')[-1].capitalize()
         retyper = {key: self.sql_mapping[key][1] for key in self.sql_mapping}
         df = pd.read_csv(os.path.join(ROOT, 'tmp', obj.filename), dtype=retyper)
-        LOG.info('%s(SCGLocationBase)->%s.shape: %s' % (prfx, self.name, str(df.shape)))
+        LOG.info('%s(SCGLocationBase)->%s.shape: %s' % (self.name, self.name, str(df.shape)))
         dropper = [col for col in df.columns if col not in self.sql_mapping]
         df.drop(dropper, axis=1, inplace=True)
         df.drop_duplicates(inplace=True)
-        LOG.info('%s(SCGLocationBase)->drop(%s) shape(%s)' % (str(dropper), str(df.shape)))
+        LOG.info('%s(SCGLocationBase)->drop(%s) shape(%s)' % (self.name, str(dropper), str(df.shape)))
         renamer = {key: self.sql_mapping[key][0] for key in self.sql_mapping}
         df.rename(columns=renamer, inplace=True)
-        LOG.info('%s(SCGLocationBase)->retyper(%s) renamer(%s)' % (str(retyper), str(renamer)))
+        LOG.info('%s(SCGLocationBase)->retyper(%s) renamer(%s)' % (self.name, str(retyper), str(renamer)))
         df.to_csv(os.path.join(ROOT, 'tmp', self.filename), index=False)
 
         # insert to live scg table TODO: point this at a staging database.
         # plus, to_sql is not efficient for large data sets (should work for weekly runs though.)
         db = u.get_db_connection(SERVER_B, DATABASE_B)
         scg_target = pd.read_sql('select * from %s' % prfx, con=db)
-        LOG.info('%s(SCGLocationBase)->db(%s) scg_target.shape(%s)' % (str(db), str(scg_target.shape)))
+        LOG.info('%s(SCGLocationBase)->db(%s) scg_target.shape(%s)' % \
+            (self.name, str(db), str(scg_target.shape)))
         scg_target.drop(scg_target.index, inplace=True)
         scg_target.append(df, sort=False).to_sql(prfx, con=db, if_exists='replace', index=False)
 
