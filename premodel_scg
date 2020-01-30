@@ -1,2 +1,2 @@
 #!/bin/bash
-luigi --module scripts.preprocess_tm_vrp ProcessDbToDb
+luigi --module scripts.vrp_scg RptToScg
